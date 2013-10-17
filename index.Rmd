@@ -1,0 +1,247 @@
+---
+title       : Field notes from Brazil
+subtitle    : predation, competition, and the mystery of the small red larvae
+author      : Andrew MacDonald
+job         : phd
+framework   : io2012        # {io2012, html5slides, shower, dzslides, ...}
+highlighter : highlight.js  # {highlight.js, prettify, highlight}
+hitheme     : tomorrow      # 
+widgets     : []            # {mathjax, quiz, bootstrap}
+mode        : selfcontained # {standalone, draft}
+---
+## Hi I'm Andrew
+
+* PhD student at Diane Srivastava's lab at UBC
+* Field work in Brazil 
+
+```{r echo=FALSE,message=FALSE}
+opts_chunk$set(message=FALSE,warning=FALSE,echo=FALSE,fig.cap=FALSE,fig.align='center')
+
+## load packages
+library(ggplot2)
+library(bipartite)
+library(reshape2)
+library(vegan)
+library(picante)
+library(beanplot)
+library(pander)
+library(gplots)
+library(plyr)
+library(gridExtra)
+library(png)
+
+```
+
+```{r myfile-1-plot, echo = FALSE, results = 'asis',out.width="500px"}
+design <- readPNG("../fact.design.png")
+grid.raster(design)
+```
+--- 
+## Co-occurance data
+
+```{r }
+# occurrance data -- abundance
+occur <- read.csv("../../../../Brazil2011/data/reorganized_data/predator.cooccur.txt",stringsAsFactor=FALSE)
+# occurrance data -- metabolic capacity
+metabolic  <- read.csv("../../../../Brazil2011/data/reorganized_data/predator.cooccur.metabolic.txt",
+                       stringsAsFactor=FALSE)
+# feeding trial data
+foodweb <- read.csv("../../../../Brazil2011/data/reorganized_data/reorganized.feeding.trial.data.csv",
+                    stringsAsFactors=FALSE)
+# experimental data
+pd <- read.csv("../../../../Brazil2011/data/reorganized_data/pd_exp_cleaned_data.csv",stringsAsFactors=FALSE)
+# enriched leaves -- ie just the N data for the detritus we put in.
+enriched <- read.csv("../../../../Brazil2011/data/reorganized_data/enriched_leaves.csv",stringsAsFactors=FALSE)
+# phylogeny data
+predtree_timetree_ages <- read.tree("../../../../Brazil2011/data/reorganized_data/predator_tree_time.newick")
+
+## load in functions
+source("../../../../Brazil2011/R.scripts/FUNCTIONS_predator_diversity.R")
+
+#source("../R.scripts/cleanup_organization_for_graphing_analysis.R")
+#dropping a record that seems to have been 90% decomposed!
+pd[which(pd$decomp>0.7),'decomp'] <- NA
+## just to make sure:
+#with(pd,table(treatment))
+#head(pd)
+```
+
+```{r CALC_distance_matrices}
+####### metabolic matrix ####
+## we need to calculate two distance matrices:
+## 1) metabolic capacity distance
+## 2) phylogenetic distance
+
+## metabolic matrix -- the "distance" between predator co-occurance, measured as metabolism
+## remove the first column -- it's species names
+metabolic.matrix <- metabolic[-1]
+## put that name column as dimnames
+dimnames(metabolic.matrix)[[1]] <- metabolic[,1]
+
+## now that metabolic capacity is set up, there are several ways for us to go forward: 
+## euclidian distance, or maybe correlations?
+
+## euclidian distance between metabolic densities
+pred.abd.distance <- vegdist(metabolic.matrix,method="euclid")
+occur_matrix <- as.matrix(pred.abd.distance) # convert to matrix
+
+## correlations between metabolic densities
+metabolic_mat <- as.matrix(metabolic.matrix)
+# reordered metabolic distance matrix
+#occur_matrix <- cor(t(metabolic_mat))
+
+####### phylogeny matrix ####
+## Calculate distances
+allpred_phylodist <- cophenetic(predtree_timetree_ages)
+
+######## 
+```
+
+```{r CALC_diet_similarity}
+# Check for TRUE ZEROS in cast matrix.
+
+# trial.list <- split(foodweb,foodweb$predator.names)
+# sapply(trial.list,nrow)
+## need predators as columns, herbivores as rows
+foodweb.cast <- dcast(data=foodweb,formula=Prey.species~predator.names,value.var="eaten.numeric",fun.aggregate=sum)
+# remove species names
+foodweb.matrix <- as.matrix(foodweb.cast[,-1])
+# have better names
+dimnames(foodweb.matrix) <- list(foodweb.cast[[1]],names(foodweb.cast)[-1])
+foodweb.matrix <- foodweb.matrix[,-ncol(foodweb.matrix)]  ## last column was an NA predator.
+emptyRow <- which(rowSums(foodweb.matrix)==0)
+foodweb.matrix <- foodweb.matrix[-emptyRow,]
+# make the distance matrix -- with the jaccard index?
+## finally, calculate distance
+distances <- vegdist(t(foodweb.matrix),method='jaccard',diag=TRUE)
+## make a distance matrix so lower.tri subsetting works
+diet_dist_mat <- as.matrix(distances)
+
+```
+
+```{r CALC_experiment-randomization_summary}
+### ---- group means ####
+##go2 <- responses.means(1000)
+#write.csv(go2,"randomizations.group.means.csv")
+rand.means <- read.csv("../../../../Brazil2011/data/predator.div.experiment/randomizations.group.means.csv")
+## order these correctly
+rand.means$sp.pair <- factor(rand.means$sp.pair,
+                             levels=c('elong + andro','elong + tab',
+                               'elong + leech')
+                             )
+## remove the X column
+rand.means <- rand.means[,-1]
+
+### supplementary figure?  ####
+meansMelt <- melt(rand.means)
+# #densityplot(~growth+survival+fine+decomp,groups=sp.pair,data=go)
+# ggplot(data=meansMelt,aes(x=value,colour=sp.pair))+geom_histogram()+facet_wrap(~variable)
+
+## summarize the randomizations 
+summarize_randoms <- ddply(.data=meansMelt,.variables=.(sp.pair,variable),summarize,
+                       mean=mean(value),lower=quantile(value,probs=c(0.025)),
+                       upper=quantile(value,probs=c(0.975))
+                       )
+#####
+```
+
+```{r DATA_merge_similarity_matrices}
+## we need to merge together several matrices:
+## metabolic occurance + predator phylogenetic distance
+## diet similarity + predator phylogenetic distance
+## experiment randomization results + predator phylogenetic distance
+
+## note that the nomeclature of the columns keeps `sp.pair` as the only shared name among columns.
+#### metabolic occurance ####
+metabolic_df <- melt(occur_matrix)[melt(upper.tri(occur_matrix))$value,]
+names(metabolic_df) <- c("metapred1", "metapred2", "metadistance")
+metabolic_df$sp.pair <- paste(metabolic_df$metapred1,metabolic_df$metapred2,sep="_")
+
+
+## Phylogenetic distance ####
+allpred_phylodist_df <- melt(allpred_phylodist)[melt(upper.tri(allpred_phylodist))$value,]
+names(allpred_phylodist_df) <- c("phylopred1", "phylopred2", "phylodistance")
+allpred_phylodist_df_RH <- allpred_phylodist_df
+allpred_phylodist_df_LH <- allpred_phylodist_df
+allpred_phylodist_df_RH$sp.pair <- paste(allpred_phylodist_df_RH$phylopred1, allpred_phylodist_df_RH$phylopred2,sep="_")
+allpred_phylodist_df_LH$sp.pair <- paste(allpred_phylodist_df_LH$phylopred2, allpred_phylodist_df_LH$phylopred1,sep="_")
+
+## Diet similarity ####
+diet_df <- melt(diet_dist_mat)[melt(upper.tri(diet_dist_mat))$value,]
+names(diet_df) <- c("dietpred1", "dietpred2", "dietdistance")
+diet_df$sp.pair <- paste(diet_df$dietpred1,diet_df$dietpred2,sep="_")
+## we also need to know how many trials each predator has in common:
+incommon <- t(foodweb.matrix>0)%*%(foodweb.matrix>0)
+incommon_df <- melt(incommon)[melt(upper.tri(incommon))$value,]
+names(incommon_df) <- c("commonpred1", "commonpred2", "Ncommon")
+incommon_df$sp.pair <- paste(incommon_df$commonpred1,incommon_df$commonpred2,sep="_")
+
+#### randomization results ####
+# distances of L. elongatum to everything:
+Le_distances <- sort(allpred_phylodist["Leptagrion.elongatum",])
+## a lookup table to pair spp leves with time-since-divergence
+lkup <- data.frame(sp.pair=levels(summarize_randoms$sp.pair),
+                   Time=Le_distances[c("Leptagrion.andromache","Tabanidae.spA","Hirudinidae")])
+
+#### merging ####
+## metabolic occurance + predator phylogenetic distance
+metabolic_occur_phylo1 <- merge(metabolic_df,allpred_phylodist_df_LH)
+metabolic_occur_phylo2 <- merge(metabolic_df,allpred_phylodist_df_RH)
+metabolic_occur_phylo <- rbind(metabolic_occur_phylo1,metabolic_occur_phylo2)
+## diet similarity + predator phylogenetic distance
+diet_df1 <- merge(diet_df,incommon_df)
+
+diet_similarity_phylo1 <- merge(diet_df1,allpred_phylodist_df_LH)
+diet_similarity_phylo2 <- merge(diet_df1,allpred_phylodist_df_RH)
+diet_similarity_phylo <- rbind(diet_similarity_phylo1,diet_similarity_phylo2)
+## experiment randomization results + predator phylogenetic distance
+#diet_df1$sp.pair[!diet_df1$sp.pair%in%diet_similarity_phylo$sp.pair]
+## as this code shows, small lepts are not in the running yet
+summarize_randoms_phylo <- merge(summarize_randoms,lkup)
+
+#####
+```
+
+```{r FIG_metabolic_occurance_as_phylo}
+ggplot(metabolic_occur_phylo,aes(x=phylodistance,y=metadistance))+geom_point()+xlab("phylogenetic distance")+ylab("correlation between total metabolic capacity")
+```
+---
+## Diet similarity
+```{r FIG_feeding_trial_as_phylo}
+ggplot(data=diet_similarity_phylo,aes(y=dietdistance,x=phylodistance,size=Ncommon))+geom_point()+scale_size(range=c(2,6))+ylab("Euclidian distance between feeding trials")+xlab("phylogenetic distance")+stat_smooth(method="lm")
+# plot(dist.mat[lower.tri(dist.mat)]~
+#        jitter(phylodist[lower.tri(phylodist)],amount=10),
+#      xlab="phylogenetic distance",ylab="jaccard distance between feeding trials")
+```
+---
+## experimental design
+```{r FIG_PD_experiment_nonadditive}
+ggplot(subset(summarize_randoms_phylo,summarize_randoms_phylo$variable=="survival"),
+       aes(x=Time,y=mean))+geom_errorbar(aes(ymin=lower, ymax=upper),width=0)+geom_point(size=3)+ylab("Mean treatment difference, Control-Treatment")+xlab("Time (Mya)")
+# 
+# ggplot(summarize_randoms_phylo,
+#        aes(x=Time,y=mean))+geom_errorbar(aes(ymin=lower, ymax=upper),width=0)+geom_point(size=3)+ylab("Mean treatment difference, Control-Treatment")+xlab("Time (Mya)")+facet_wrap(~variable)
+```
+---
+## experimental responses
+```{r FIG_experiment_responses}
+pd_long <- melt(pd[names(pd)%in%c("treatment","total.surv","fine","decomp","growth","N")],id.vars="treatment")
+
+plotmaker <- function(resp,kill_trtnames=TRUE,label){
+ggplot(pd_long,aes(y=value,x=treatment))+stat_summary(fun.y = mean, fun.ymin = min, fun.ymax = max,geom="pointrange",subset=.(variable==resp))+geom_hline(x=0,colour="grey")+ylab(label)+coord_flip()+if(kill_trtnames) theme(axis.text.y = element_blank(), axis.title.y=element_blank())
+}
+
+surv <- plotmaker(resp="total.surv",kill_trtnames=FALSE,label="prey survival")
+N <- plotmaker("N",label="Nitrogen")
+growth <- plotmaker("growth",label="growth (mm)")
+decomp <- plotmaker("decomp",label="decomposition \n (g)")
+fine <- plotmaker("fine",label="production of \n FPOM (g)")
+grid.arrange(surv,N,growth,decomp,fine,ncol=5,widths=unit(c(2,rep(1, 4)), "null"))
+
+
+```
+---
+```{r one}
+plotmaker(resp="total.surv",kill_trtnames=FALSE,label="prey survival")
+```
+
